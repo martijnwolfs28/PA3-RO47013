@@ -1,13 +1,12 @@
-# drone_env_with_trees_and_gusts.py
+# drone_env_gaussian_wind.py
 # -------------------------------------------------------------------
 # A 2D drone environment with:
 #  - Two-panel display (left= handle, right= larger environment)
 #  - Constrained handle
-#  - More trees, variable number
-#  - "Less strict" repeated collisions: drone must leave by a threshold
-#  - Pre-generated wind gusts, direction limited ±45 deg around init_dir
-#  - Wind magnitude in a specified range
-#  - Haptic feedback from wind + tree collisions
+#  - Many trees, collisions with threshold for both trees and walls
+#  - Gaussian-based wind with smaller variance, limited direction range
+#  - The handle block color is a gradient from light red to deep red
+#    depending on net force magnitude.
 
 import sys
 import math
@@ -17,7 +16,7 @@ import pygame
 import random
 
 ###############################################################################
-# Minimal PHYSICS
+# PHYSICS
 ###############################################################################
 try:
     import serial.tools.list_ports
@@ -37,7 +36,7 @@ class Physics:
             else:
                 print("[PHYSICS] No device found; simulating.")
         else:
-            print("[PHYSICS] No serial lib installed; simulating.")
+            print("[PHYSICS] No serial library; simulating.")
             self.port = None
 
     def find_device_port(self):
@@ -52,7 +51,7 @@ class Physics:
 
     def update_force(self, force_vector):
         if self.device_present:
-            # Convert (fx,fy)-> motor torques
+            # convert (fx,fy)-> device
             pass
         else:
             pass
@@ -62,38 +61,36 @@ class Physics:
 
 
 ###############################################################################
-# GRAPHICS with two surfaces
+# GRAPHICS: two surfaces
 ###############################################################################
 class Graphics:
     def __init__(self, device_connected, window_size=(1200,600)):
         pygame.init()
         self.window_size = window_size
         self.window = pygame.display.set_mode(window_size)
-        pygame.display.set_caption("Drone Env with More Trees, Gusts, and Collision-Threshold")
+        pygame.display.set_caption("Drone Env with Gaussian Wind & Collision Threshold")
 
         self.surface_left = pygame.Surface((window_size[0]//2, window_size[1]))
         self.surface_right= pygame.Surface((window_size[0]//2, window_size[1]))
 
         self.clock = pygame.time.Clock()
         self.FPS = 100
-
         self.font = pygame.font.Font(None, 24)
 
         self.device_connected = device_connected
-
         # Pseudo-haptics
         self.sim_k = 0.4
         self.sim_b = 0.8
 
-        # Handle constraints
-        wL, hL = self.surface_left.get_size()
-        self.handle_min_x = 50
-        self.handle_max_x = wL - 50
-        self.handle_min_y = 50
-        self.handle_max_y = hL - 50
+        # handle constraints
+        wL,hL= self.surface_left.get_size()
+        self.handle_min_x= 50
+        self.handle_max_x= wL-50
+        self.handle_min_y= 50
+        self.handle_max_y= hL-50
 
-        # Drone scale
-        self.drone_scale = 300
+        # drone scale
+        self.drone_scale= 300
 
         # Colors
         self.white     = (255,255,255)
@@ -118,17 +115,15 @@ class Graphics:
         self.surface_right.fill(self.lightblue)
 
     def sim_forces(self, handle_pos, external_force, mouse_pos):
-        """
-        Pseudo-haptics with 4-way constraint
-        """
+        # pseudo-haptics with clamp
         diff = (mouse_pos[0]-handle_pos[0], mouse_pos[1]-handle_pos[1])
-        scale_force = (external_force[0]*0.05, external_force[1]*0.05)
+        scale_f = (external_force[0]*0.05, external_force[1]*0.05)
         k_term = (self.sim_k*diff[0], self.sim_k*diff[1])
-        b_term = (scale_force[0]/self.sim_b, scale_force[1]/self.sim_b)
+        b_term = (scale_f[0]/self.sim_b, scale_f[1]/self.sim_b)
         dp = (k_term[0]-b_term[0], k_term[1]-b_term[1])
 
-        new_x = handle_pos[0] + dp[0]
-        new_y = handle_pos[1] + dp[1]
+        new_x= handle_pos[0]+ dp[0]
+        new_y= handle_pos[1]+ dp[1]
         # clamp
         if new_x< self.handle_min_x: new_x= self.handle_min_x
         if new_x> self.handle_max_x: new_x= self.handle_max_x
@@ -140,82 +135,83 @@ class Graphics:
     def convert_drone_to_screen(self, x_m, y_m):
         w2,h2 = self.surface_right.get_size()
         cx,cy = w2//2, h2//2
-        sx = cx + x_m*self.drone_scale
-        sy = cy - y_m*self.drone_scale
+        sx= cx + x_m*self.drone_scale
+        sy= cy - y_m*self.drone_scale
         return (int(sx), int(sy))
 
     def render_left(self, handle_pos, total_force):
         """
-        Draw handle rect with color gradient from total_force magnitude
+        Color: from light red to deep red depending on force magnitude
+        We'll define a max range for the color, e.g. up to 2.0
         """
-        mag = math.hypot(total_force[0], total_force[1])
-        cval = min(255, int(40 + mag*15))
-        color = (255, cval, cval)
-        rect = pygame.Rect(0,0,40,40)
-        rect.center = (int(handle_pos[0]), int(handle_pos[1]))
+        fm= math.hypot(total_force[0], total_force[1])
+        # ratio in [0,1]
+        ratio= min(1.0, fm/2.0)
+        # We start from (255, 200, 200) for ratio=0 to (255, 0, 0) for ratio=1
+        # So the green/blue channels go from 200 down to 0
+        gb= int(200*(1-ratio))
+        color= (255, gb, gb)
+
+        rect= pygame.Rect(0,0,40,40)
+        rect.center= (int(handle_pos[0]), int(handle_pos[1]))
         pygame.draw.rect(self.surface_left, color, rect, border_radius=6)
 
-        # crosshair
-        wL,hL = self.surface_left.get_size()
-        cx, cy = wL//2, hL//2
-        pygame.draw.line(self.surface_left, self.black, (cx-10, cy), (cx+10,cy),2)
+        # crosshair + instructions
+        wL,hL= self.surface_left.get_size()
+        cx,cy= wL//2, hL//2
+        pygame.draw.line(self.surface_left, self.black, (cx-10,cy), (cx+10,cy),2)
         pygame.draw.line(self.surface_left, self.black, (cx,cy-10), (cx,cy+10),2)
 
-        # instructions
-        lines = [
+        lines= [
             "Keys:",
-            " Q = quit",
-            " R = reset",
-            " W = toggle wind",
-            "",
-            "Left panel: handle (mouse or device).",
-            "Right panel: drone in big environment.",
-            "Trees = green circles, walls= black rectangle.",
-            "Collision => collision count. Must leave object by threshold to re-collide."
+            " Q=quit, R=reset, W=toggle wind",
+            "Left: handle (mouse/haptic).",
+            "Right: drone in bigger env, walls=box, trees=green.",
+            "Collision with threshold. Gaussian wind. Force color => handle load."
         ]
         yoff=10
         for ln in lines:
-            surf = self.font.render(ln, True, (0,0,0))
+            surf= self.font.render(ln, True, (0,0,0))
             self.surface_left.blit(surf, (10,yoff))
             yoff+=20
 
     def render_right(self, drone_pos, drone_radius, walls, trees, collision_count,
                      wind_vec, wind_on):
         (xmin,xmax,ymin,ymax)= walls
-        # walls
+        # draw walls
         c_tl= self.convert_drone_to_screen(xmin, ymax)
         c_br= self.convert_drone_to_screen(xmax, ymin)
         rect= pygame.Rect(c_tl[0], c_tl[1], c_br[0]-c_tl[0], c_br[1]-c_tl[1])
         pygame.draw.rect(self.surface_right, self.black, rect,2)
 
-        # trees
+        # draw trees
         for (tx,ty,tr) in trees:
             cc= self.convert_drone_to_screen(tx,ty)
-            rpix = int(tr*self.drone_scale)
-            pygame.draw.circle(self.surface_right, self.green, cc, rpix)
+            rp= int(tr*self.drone_scale)
+            pygame.draw.circle(self.surface_right, self.green, cc, rp)
 
         # drone
         cdrone= self.convert_drone_to_screen(drone_pos[0], drone_pos[1])
         rpix= int(drone_radius*self.drone_scale)
         pygame.draw.circle(self.surface_right, self.red, cdrone, rpix)
 
-        # collision text
-        text_surf= self.font.render(f"Collisions={collision_count}", True,(0,0,0))
-        self.surface_right.blit(text_surf, (10,10))
+        # collisions
+        t_surf= self.font.render(f"Collisions={collision_count}", True, (0,0,0))
+        self.surface_right.blit(t_surf, (10,10))
 
         # wind arrow if on
         if wind_on:
             wmag= np.linalg.norm(wind_vec)
             if wmag>1e-3:
-                ang= math.atan2(wind_vec[1], wind_vec[0])
+                angle= math.atan2(wind_vec[1], wind_vec[0])
                 arrow_len= 0.2*wmag
                 start= cdrone
-                end= (cdrone[0] + arrow_len*self.drone_scale*math.cos(ang),
-                      cdrone[1] - arrow_len*self.drone_scale*math.sin(ang))
+                end= (cdrone[0]+ arrow_len*self.drone_scale*math.cos(angle),
+                      cdrone[1]- arrow_len*self.drone_scale*math.sin(angle))
                 pygame.draw.line(self.surface_right, (0,0,255), start, end,3)
 
     def finalize(self):
-        self.window.blit(self.surface_left, (0,0))
+        self.window.blit(self.surface_left,(0,0))
         self.window.blit(self.surface_right,(self.window_size[0]//2,0))
         pygame.display.flip()
         self.clock.tick(self.FPS)
@@ -226,21 +222,21 @@ class Graphics:
 
 
 ###############################################################################
-# Main Drone environment class
+# Main Drone environment
 ###############################################################################
-class DroneEnvGusts:
+class DroneEnvGaussWind:
     def __init__(self):
-        self.physics = Physics(hardware_version=3)
-        self.graphics = Graphics(self.physics.is_device_connected(), (1200,600))
+        self.physics= Physics(hardware_version=3)
+        self.graphics= Graphics(self.physics.is_device_connected(), (1200,600))
 
         # handle
         wL,hL= self.graphics.surface_left.get_size()
-        self.handle_pos= np.array([wL//2,hL//2],dtype=float)
+        self.handle_pos= np.array([wL//2, hL//2],dtype=float)
         self.mouse_pos= self.handle_pos.copy()
 
-        # environment bounds
-        self.xmin, self.xmax= -1.0, 1.0
-        self.ymin, self.ymax= -0.8, 0.8
+        # environment
+        self.xmin,self.xmax= -1.0, 1.0
+        self.ymin,self.ymax= -0.8, 0.8
 
         # drone
         self.drone_pos= np.array([0.0,0.0],dtype=float)
@@ -250,14 +246,13 @@ class DroneEnvGusts:
         self.damping=0.96
 
         # collisions
-        self.collision_count=0
-        # we'll store a set of "currently colliding" object IDs so that
-        # a new collision is only counted after leaving by a threshold
-        self.colliding_set= set()
-        self.leave_threshold= 0.01  # must separate by 1 cm before recolliding
+        self.collision_count= 0
+        self.colliding_set_walls= False  # track if currently colliding with walls
+        self.colliding_trees= set()
+        self.leave_threshold= 0.01  # must move away by 1 cm
 
         # trees
-        self.num_trees= 12  # variable for more trees
+        self.num_trees= 12
         self.tree_min_size=0.02
         self.tree_max_size=0.07
         self.trees=[]
@@ -265,17 +260,19 @@ class DroneEnvGusts:
 
         # wind
         self.wind_on= False
-        # Pre-generate wind list for each frame
-        # direction can vary ±45 deg from initial_dir
-        self.initial_wind_dir_deg= 30.0
-        self.wind_dir_range_deg= 90.0  # total range
-        self.wind_mag_min= 0.0
-        self.wind_mag_max= 0.8
-        self.num_wind_steps= 3000  # how many frames in the list
-        self.wind_data= []
-        self.wind_idx=0
-        # random but seeded
+        # We'll define a seeded random
         self.rng= random.Random(9999)
+        # define initial heading + 45 deg range
+        self.init_dir_deg= 30.0
+        self.dir_range_deg= 90.0  # total range => ±45 deg
+        self.wind_mag_min= 0.0
+        self.wind_mag_max= 0.5  # lower max for smaller variance
+        self.gauss_sigma=0.05   # small standard dev for each step
+        # we'll store a list of frames again
+        self.num_wind_steps= 3000
+        self.wind_data=[]
+        self.wind_idx=0
+        # generate
         self.generate_wind_list()
 
         # collision bump
@@ -291,20 +288,35 @@ class DroneEnvGusts:
             x= random.uniform(self.xmin+0.1, self.xmax-0.1)
             y= random.uniform(self.ymin+0.1, self.ymax-0.1)
             r= random.uniform(self.tree_min_size, self.tree_max_size)
-            self.trees.append((x,y,r))
+            self.trees.append( (x,y,r) )
 
     def generate_wind_list(self):
-        # define an initial direction
-        init_rad= math.radians(self.initial_wind_dir_deg)
-        # direction range ± half of self.wind_dir_range_deg
-        half_range= math.radians(self.wind_dir_range_deg/2.0)
+        """
+        We'll maintain a 'current' angle & magnitude that evolves with small gaussian steps,
+        but clamp angle in [init_dir ± 45 deg], and magnitude in [wind_mag_min, wind_mag_max].
+        """
+        dir_rad= math.radians(self.init_dir_deg)
+        half_range= math.radians(self.dir_range_deg/2.0)
+        mag= (self.wind_mag_min + self.wind_mag_max)*0.5  # mid
+        angle= dir_rad
 
         for i in range(self.num_wind_steps):
-            # pick direction in [init_rad - half_range, init_rad+ half_range]
-            angle= init_rad + self.rng.uniform(-half_range, half_range)
-            mag= self.rng.uniform(self.wind_mag_min, self.wind_mag_max)
-            self.wind_data.append((mag,angle))
-        print(f"[INFO] wind_data list created with {len(self.wind_data)} frames.")
+            # random small step in magnitude
+            dm= self.rng.gauss(0.0, self.gauss_sigma)
+            mag+= dm
+            mag= max(self.wind_mag_min, min(self.wind_mag_max, mag))
+
+            # random small step in angle
+            dtheta= self.rng.gauss(0.0, self.gauss_sigma)
+            angle+= dtheta
+            # clamp angle to [dir_rad-half_range, dir_rad+half_range]
+            lo= dir_rad- half_range
+            hi= dir_rad+ half_range
+            if angle< lo: angle= lo
+            if angle> hi: angle= hi
+
+            self.wind_data.append((mag, angle))
+        print("[INFO] wind_data created with length", len(self.wind_data))
 
     def run(self):
         try:
@@ -333,26 +345,23 @@ class DroneEnvGusts:
             elif k== ord('w'):
                 self.wind_on= not self.wind_on
                 if not self.wind_on:
-                    # zero out
                     self.wind_idx=0
-                print(f"[INFO] Toggled wind => {self.wind_on}")
+                print("[INFO] Toggled wind =>", self.wind_on)
 
         self.mouse_pos= np.array(mp)
+
         # user force
         f_user= self.compute_user_force()
-
-        # pick wind from the pre-generated list if on
+        # wind
         f_wind= np.array([0.0,0.0])
         if self.wind_on:
-            (mag,angle)= self.wind_data[self.wind_idx]
+            mag,angle= self.wind_data[self.wind_idx]
             self.wind_idx= (self.wind_idx+1)% len(self.wind_data)
             fx= mag*math.cos(angle)
             fy= mag*math.sin(angle)
             f_wind= np.array([fx,fy],dtype=float)
 
         self.update_bump(dt)
-
-        # sum forces
         fx= f_user[0]+ f_wind[0]+ self.bump_force[0]
         fy= f_user[1]+ f_wind[1]+ self.bump_force[1]
 
@@ -364,19 +373,16 @@ class DroneEnvGusts:
         self.drone_vel*= self.damping
         self.drone_pos+= self.drone_vel*dt
 
-        # check walls
-        collided= self.check_wall_collision()
-        if collided:
-            self.trigger_bump()
-            self.collision_count+=1
+        # check wall collisions with threshold
+        self.check_wall_collision_threshold()
 
-        # check trees
-        self.check_trees_collision()
+        # check tree collisions with threshold
+        self.check_tree_collision_threshold()
 
-        # build haptic force => negative of wind + negative of collision bump
-        hf_x= -f_wind[0]+ -self.bump_force[0]
-        hf_y= -f_wind[1]+ -self.bump_force[1]
-        haptic_force= np.array([hf_x,hf_y],dtype=float)
+        # build haptic force => negative wind + negative collision bump
+        hf_x= -f_wind[0] - self.bump_force[0]
+        hf_y= -f_wind[1] - self.bump_force[1]
+        haptic_force= np.array([hf_x, hf_y], dtype=float)
 
         # real or pseudo
         if self.physics.is_device_connected():
@@ -387,7 +393,7 @@ class DroneEnvGusts:
 
         # draw
         self.graphics.erase_surfaces()
-        net_fx= fx  # for color
+        net_fx= fx
         net_fy= fy
         self.graphics.render_left(self.handle_pos, (net_fx, net_fy))
         walls= (self.xmin, self.xmax, self.ymin, self.ymax)
@@ -397,7 +403,7 @@ class DroneEnvGusts:
         self.graphics.finalize()
 
     def compute_user_force(self):
-        """scale_factor=0.01, from handle offset to user force."""
+        """ scale_factor=0.01 from handle offset to user force """
         wL,hL= self.graphics.surface_left.get_size()
         cx,cy= wL//2, hL//2
         dx= self.handle_pos[0]- cx
@@ -407,30 +413,65 @@ class DroneEnvGusts:
         fy= -dy*scale_factor
         return np.array([fx,fy],dtype=float)
 
-    def check_wall_collision(self):
-        col=False
+    def check_wall_collision_threshold(self):
+        """
+        We track if currently colliding with the wall or not (colliding_set_walls).
+        We only count a new collision if we were not previously in collision.
+        Once in collision, we remain so until we are > leave_threshold from the boundary.
+        """
+        in_collision= self.is_in_wall_collision()
+        if in_collision:
+            if not self.colliding_set_walls:
+                # new collision
+                self.collision_count+=1
+                self.trigger_bump()
+                self.colliding_set_walls= True
+        else:
+            if self.colliding_set_walls:
+                # see if we've left by threshold
+                # we define "left by threshold" as being more than threshold away from any wall
+                distw= self.dist_to_wall()
+                if distw> self.leave_threshold:
+                    self.colliding_set_walls= False
+
+    def is_in_wall_collision(self):
+        # if the drone is out of [xmin+radius, xmax-radius], etc. then it's "colliding"
+        # or very slightly within the boundary
         if self.drone_pos[0]< self.xmin+self.drone_radius:
+            # push out
             self.drone_pos[0]= self.xmin+self.drone_radius
             self.drone_vel[0]*= -0.5
-            col=True
+            return True
         if self.drone_pos[0]> self.xmax-self.drone_radius:
             self.drone_pos[0]= self.xmax-self.drone_radius
             self.drone_vel[0]*= -0.5
-            col=True
+            return True
         if self.drone_pos[1]< self.ymin+self.drone_radius:
             self.drone_pos[1]= self.ymin+self.drone_radius
             self.drone_vel[1]*= -0.5
-            col=True
+            return True
         if self.drone_pos[1]> self.ymax-self.drone_radius:
             self.drone_pos[1]= self.ymax-self.drone_radius
             self.drone_vel[1]*= -0.5
-            col=True
-        return col
+            return True
+        return False
 
-    def check_trees_collision(self):
+    def dist_to_wall(self):
         """
-        If dist< sumr => collision if not in colliding_set
-        If dist> sumr + leave_threshold => remove from colliding_set
+        Return how far the drone is from the nearest boundary.
+        If > threshold => not colliding
+        """
+        dx_left= self.drone_pos[0] - (self.xmin+self.drone_radius)
+        dx_right= (self.xmax-self.drone_radius) - self.drone_pos[0]
+        dy_bottom= self.drone_pos[1] - (self.ymin+self.drone_radius)
+        dy_top= (self.ymax-self.drone_radius) - self.drone_pos[1]
+        # The min of these is how close we are to a boundary
+        return min(dx_left, dx_right, dy_bottom, dy_top)
+
+    def check_tree_collision_threshold(self):
+        """
+        If dist< sumr => collision if not in colliding_trees
+        Must leave sumr+ threshold to remove from colliding_trees.
         """
         for i,(tx,ty,tr) in enumerate(self.trees):
             dx= self.drone_pos[0]- tx
@@ -438,9 +479,9 @@ class DroneEnvGusts:
             dist= math.hypot(dx,dy)
             sumr= self.drone_radius+ tr
             if dist< sumr:
-                # in collision
-                if i not in self.colliding_set:
+                if i not in self.colliding_trees:
                     # new collision
+                    # push out
                     overlap= sumr- dist
                     if dist>1e-6:
                         nx= dx/dist
@@ -452,17 +493,16 @@ class DroneEnvGusts:
                     self.drone_vel*= -0.5
                     self.collision_count+=1
                     self.trigger_bump()
-                    self.colliding_set.add(i)
+                    self.colliding_trees.add(i)
             else:
-                # if we are separated by sumr + threshold => remove from set
-                if i in self.colliding_set:
-                    # check if dist> sumr+ leave_threshold
+                if i in self.colliding_trees:
+                    # we must see if dist> sumr+ threshold
                     if dist> sumr+ self.leave_threshold:
-                        self.colliding_set.remove(i)
+                        self.colliding_trees.remove(i)
 
     def trigger_bump(self):
         """
-        short haptic bump. random direction
+        short haptic bump
         """
         mag=0.5
         ang= random.random()*2*math.pi
@@ -480,23 +520,18 @@ class DroneEnvGusts:
                 self.bump_force*= fade
 
     def reset_env(self):
-        """Reset the environment for a new 'trial'."""
-        # reset handle
         wL,hL= self.graphics.surface_left.get_size()
         self.handle_pos[:]= [wL//2,hL//2]
-        # reset drone
         self.drone_pos[:]=0
         self.drone_vel[:]=0
         self.collision_count=0
-        self.colliding_set.clear()
-        # reset wind to start
-        self.wind_idx=0
-        self.wind_on=False
-        self.wind_vec= np.array([0.0,0.0])
-        # reset collision bump
-        self.bump_force[:]= 0
+        self.colliding_set_walls= False
+        self.colliding_trees.clear()
+        self.bump_force[:]=0
         self.bump_ttl=0.0
+        self.wind_on= False
+        self.wind_idx=0
 
 if __name__=="__main__":
-    app= DroneEnvGusts()
-    app.run()
+    env= DroneEnvGaussWind()
+    env.run()
