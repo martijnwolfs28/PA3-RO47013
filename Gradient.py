@@ -43,6 +43,7 @@ class Physics:
         return self.device_present
 
     def update_force(self, force_vector):
+        # If real device is found, we'd convert (fx,fy)-> device torque
         pass
 
     def close(self):
@@ -57,16 +58,16 @@ class Graphics:
         pygame.init()
         self.window_size = window_size
         self.window = pygame.display.set_mode(window_size)
-        pygame.display.set_caption("Drone with Border Gradient, Start/Finish, Data Logging")
+        pygame.display.set_caption("Drone with Weaker Gradient, Timed Trials, 2.5D Potential")
 
         self.surface_left = pygame.Surface((window_size[0]//2, window_size[1]))
         self.surface_right= pygame.Surface((window_size[0]//2, window_size[1]))
 
         self.clock = pygame.time.Clock()
         self.FPS = 100
-        self.device_connected = device_connected
+        self.font = pygame.font.Font(None,24)
 
-        self.font = pygame.font.Font(None, 24)
+        self.device_connected = device_connected
 
         # Pseudo-haptics
         self.sim_k = 0.4
@@ -79,8 +80,8 @@ class Graphics:
         self.handle_min_y= 50
         self.handle_max_y= hL-50
 
-        # drone scale
-        self.drone_scale= 300
+        # Drone scale
+        self.drone_scale=300
 
         # Colors
         self.white     = (255,255,255)
@@ -89,60 +90,62 @@ class Graphics:
         self.red       = (255,0,0)
         self.green     = (0,180,0)
 
-        # potential surface for 2.5D map
+        # Potential surface for 2.5D
         w2,h2= self.surface_right.get_size()
         self.pot_surf= pygame.Surface((w2,h2))
 
     def get_events(self):
         events = pygame.event.get()
-        keyups = []
+        keyups=[]
         for e in events:
-            if e.type == pygame.QUIT:
+            if e.type== pygame.QUIT:
                 sys.exit(0)
-            elif e.type == pygame.KEYUP:
+            elif e.type== pygame.KEYUP:
                 keyups.append(e.key)
-        mouse_pos = pygame.mouse.get_pos()
+        mouse_pos= pygame.mouse.get_pos()
         return keyups, mouse_pos
 
     def erase_surfaces(self):
         self.surface_left.fill(self.white)
-        # We won't fill the right surface here if we're about to draw the pot_surf
-        # but let's do it anyway in the final rendering step. We'll handle in render_right
-        self.surface_right.fill(self.lightblue)
+        # The right surface is typically filled or drawn in the final step
 
     def sim_forces(self, handle_pos, external_force, mouse_pos):
+        """
+        Pseudo-haptics: handle pos clamped in 4 directions
+        external_force => scaled => subtracted from mouse->handle spring
+        """
         diff = (mouse_pos[0]-handle_pos[0], mouse_pos[1]-handle_pos[1])
-        # scale external force
         scaled_f = (external_force[0]*0.05, external_force[1]*0.05)
         k_term = (self.sim_k*diff[0], self.sim_k*diff[1])
         b_term = (scaled_f[0]/self.sim_b, scaled_f[1]/self.sim_b)
-        dp = (k_term[0]-b_term[0], k_term[1]-b_term[1])
+        dp= (k_term[0]-b_term[0], k_term[1]-b_term[1])
 
         new_x= handle_pos[0]+ dp[0]
         new_y= handle_pos[1]+ dp[1]
+
+        # clamp
         if new_x< self.handle_min_x: new_x= self.handle_min_x
         if new_x> self.handle_max_x: new_x= self.handle_max_x
         if new_y< self.handle_min_y: new_y= self.handle_min_y
         if new_y> self.handle_max_y: new_y= self.handle_max_y
+        return (new_x,new_y)
 
-        return (new_x, new_y)
-
-    def convert_drone_to_screen(self, x_m, y_m):
+    def convert_drone_to_screen(self, x_m,y_m):
         w2,h2= self.surface_right.get_size()
         cx,cy= w2//2, h2//2
         sx= cx + x_m*self.drone_scale
         sy= cy - y_m*self.drone_scale
-        return (int(sx), int(sy))
+        return (int(sx),int(sy))
 
     def render_left(self, handle_pos, total_force, state, wind_on, grad_on, elapsed_time):
         """
-        Render the handle block color-coded by force magnitude,
-        plus textual info about state, time, wind, gradient
+        Color block by force magnitude
+        plus textual lines about state, time, wind, gradient
         """
         fm= math.hypot(total_force[0], total_force[1])
         ratio= min(1.0, fm/2.0)
-        gb= int(200*(1.0-ratio))
-        color= (255, gb, gb)
+        gb= int(200*(1-ratio))
+        color= (255,gb,gb)
 
         rect= pygame.Rect(0,0,40,40)
         rect.center= (int(handle_pos[0]),int(handle_pos[1]))
@@ -150,8 +153,8 @@ class Graphics:
 
         wL,hL= self.surface_left.get_size()
         cx,cy= wL//2,hL//2
-        pygame.draw.line(self.surface_left, self.black, (cx-10,cy),(cx+10,cy),2)
-        pygame.draw.line(self.surface_left, self.black, (cx,cy-10),(cx,cy+10),2)
+        pygame.draw.line(self.surface_left, self.black,(cx-10,cy),(cx+10,cy),2)
+        pygame.draw.line(self.surface_left, self.black,(cx,cy-10),(cx,cy+10),2)
 
         lines= [
             f"STATE: {state}",
@@ -159,26 +162,23 @@ class Graphics:
             f"Wind: {'ON' if wind_on else 'OFF'}",
             f"Gradient: {'ON' if grad_on else 'OFF'}",
             "",
-            "Keys: Q=quit(no save)",
-            " R=reset(no save)",
-            " W=toggle wind",
-            " G=toggle gradient",
-            " S=start, E=end+save, V=pot map"
+            "Keys: Q=quit(no save), R=reset(no save)",
+            " W=toggle wind, G=toggle gradient",
+            " S=start trial, E=end+save, V=pot map"
         ]
         yoff=10
         for ln in lines:
             surf= self.font.render(ln, True,(0,0,0))
-            self.surface_left.blit(surf,(10,yoff))
+            self.surface_left.blit(surf, (10,yoff))
             yoff+=20
 
-    def render_right(self, drone_pos, drone_radius, walls, trees, collision_count, wind_vec,
-                     wind_on, gradient_on, start_area, finish_area,
+    def render_right(self, drone_pos, drone_radius, walls, trees, collision_count,
+                     wind_vec, wind_on, gradient_on,
+                     start_area, finish_area,
                      pot_map_on, pot_surf):
-        """
-        If pot_map_on => draw pot_surf first
-        """
+        # if pot_map_on => blit pot_surf
         if pot_map_on:
-            self.surface_right.blit(pot_surf, (0,0))
+            self.surface_right.blit(pot_surf,(0,0))
         else:
             self.surface_right.fill(self.lightblue)
 
@@ -186,7 +186,7 @@ class Graphics:
         c_tl= self.convert_drone_to_screen(xmin,ymax)
         c_br= self.convert_drone_to_screen(xmax,ymin)
         rect= pygame.Rect(c_tl[0], c_tl[1], c_br[0]-c_tl[0], c_br[1]-c_tl[1])
-        pygame.draw.rect(self.surface_right, self.black, rect,2)
+        pygame.draw.rect(self.surface_right, (0,0,0), rect, 2)
 
         # start area
         s_tl= self.convert_drone_to_screen(start_area[0],start_area[3])
@@ -200,20 +200,20 @@ class Graphics:
         finish_rect= pygame.Rect(f_tl[0], f_tl[1], f_br[0]-f_tl[0], f_br[1]-f_tl[1])
         pygame.draw.rect(self.surface_right,(150,0,150), finish_rect,2)
 
-        # trees
+        # draw trees
         for (tx,ty,tr) in trees:
             cc= self.convert_drone_to_screen(tx,ty)
             rp= int(tr*300)
-            pygame.draw.circle(self.surface_right,(0,180,0), cc, rp)
+            pygame.draw.circle(self.surface_right,(0,180,0),cc,rp)
 
         # drone
         cdrone= self.convert_drone_to_screen(drone_pos[0],drone_pos[1])
         rpix= int(drone_radius*300)
-        pygame.draw.circle(self.surface_right, self.red, cdrone, rpix)
+        pygame.draw.circle(self.surface_right,(255,0,0), cdrone,rpix)
 
         # collisions
-        t_surf= self.font.render(f"Collisions={collision_count}", True,(0,0,0))
-        self.surface_right.blit(t_surf,(10,10))
+        csurf= self.font.render(f"Collisions={collision_count}", True,(0,0,0))
+        self.surface_right.blit(csurf,(10,10))
 
         # wind arrow
         if wind_on:
@@ -221,10 +221,9 @@ class Graphics:
             if wmag>1e-3:
                 angle= math.atan2(wind_vec[1], wind_vec[0])
                 arrow_len=0.2*wmag
-                end= (cdrone[0]+ arrow_len*300*math.cos(angle),
-                      cdrone[1]- arrow_len*300*math.sin(angle))
+                end=(cdrone[0]+ arrow_len*300*math.cos(angle),
+                     cdrone[1]- arrow_len*300*math.sin(angle))
                 pygame.draw.line(self.surface_right,(0,0,255), cdrone,end,3)
-
 
     def finalize(self):
         self.window.blit(self.surface_left,(0,0))
@@ -238,7 +237,7 @@ class Graphics:
 
 
 ###############################################################################
-# MAIN
+# MAIN DRONE CLASS
 ###############################################################################
 class DroneWithBorderGradient:
     def __init__(self):
@@ -254,7 +253,7 @@ class DroneWithBorderGradient:
         self.xmin,self.xmax= -1.0,1.0
         self.ymin,self.ymax= -0.8,0.8
         # start area bottom-left
-        self.start_area=[self.xmin+0.0, self.ymin+0.0, self.xmin+0.3, self.ymin+0.15]
+        self.start_area=[self.xmin, self.ymin, self.xmin+0.3, self.ymin+0.15]
         # finish area top-right
         self.finish_area=[self.xmax-0.3, self.ymax-0.15, self.xmax, self.ymax]
 
@@ -298,7 +297,7 @@ class DroneWithBorderGradient:
 
         # gradient
         self.gradient_on= False
-        self.repulse_const=0.01  # smaller => less strong
+        self.repulse_const=0.01 # weaker
         self.state="IDLE"
         self.start_time=0.0
         self.path_length=0.0
@@ -307,7 +306,7 @@ class DroneWithBorderGradient:
 
         # potential map
         self.pot_map_on= False
-        self.pot_res= (80,60)
+        self.pot_res=(80,60)
         self.pot_surf=None
         self.make_pot_surf()
 
@@ -318,7 +317,7 @@ class DroneWithBorderGradient:
         for i in range(self.num_trees):
             x= random.uniform(self.xmin+0.1,self.xmax-0.1)
             y= random.uniform(self.ymin+0.1,self.ymax-0.1)
-            r= random.uniform(self.tree_min_size, self.tree_max_size)
+            r= random.uniform(self.tree_min_size,self.tree_max_size)
             self.trees.append((x,y,r))
 
     def generate_wind_list(self):
@@ -332,8 +331,8 @@ class DroneWithBorderGradient:
             mag= max(self.wind_mag_min, min(self.wind_mag_max, mag))
             da= self.rng.gauss(0.0,self.gauss_sigma)
             angle+= da
-            lo= dir_rad- half_range
-            hi= dir_rad+ half_range
+            lo= dir_rad-half_range
+            hi= dir_rad+half_range
             if angle<lo: angle=lo
             if angle>hi: angle=hi
             self.wind_data.append((mag,angle))
@@ -341,11 +340,11 @@ class DroneWithBorderGradient:
 
     def make_pot_surf(self):
         """
-        Create color-coded potential map
+        Create color-coded potential map from border+trees
         """
         w2,h2= self.graphics.surface_right.get_size()
         pot_surf= pygame.Surface((w2,h2))
-        nx, ny= self.pot_res
+        nx,ny= self.pot_res
         dx= (self.xmax-self.xmin)/(nx-1)
         dy= (self.ymax-self.ymin)/(ny-1)
         pot_vals= np.zeros((ny,nx),dtype=float)
@@ -360,14 +359,15 @@ class DroneWithBorderGradient:
                 pot_vals[iy,ix]= p
                 if p< vmin: vmin=p
                 if p> vmax: vmax=p
-        dv= vmax-vmin if vmax>vmin else 1e-9
 
+        dv= vmax-vmin if vmax>vmin else 1e-9
         cell_w= w2/(nx-1)
         cell_h= h2/(ny-1)
+
         for iy in range(ny):
             for ix in range(nx):
                 val= pot_vals[iy,ix]
-                ratio= (val - vmin)/dv
+                ratio= (val-vmin)/dv
                 if ratio<0: ratio=0
                 if ratio>1: ratio=1
                 rcol= int(ratio*255)
@@ -381,16 +381,13 @@ class DroneWithBorderGradient:
 
         self.pot_surf= pot_surf
 
-    def compute_potential(self, x, y):
-        """
-        Potential from trees + border
-        sum of repulse_const / dist
-        """
+    def compute_potential(self, x,y):
+        # from trees + border
         pot=0.0
         # trees
         for (tx,ty,tr) in self.trees:
-            dx= x- tx
-            dy= y- ty
+            dx= x-tx
+            dy= y-ty
             dist= math.hypot(dx,dy)
             sumr= tr+self.drone_radius
             eff= dist-sumr
@@ -398,21 +395,31 @@ class DroneWithBorderGradient:
             if dist> sumr:
                 pot+= self.repulse_const/ eff
             else:
-                pot+= self.repulse_const/ 0.01
-
-        # border
-        # how close to left: x-(xmin+drone_radius)
-        # if <0 => collision handled
-        leftdist= x- (self.xmin+self.drone_radius)
-        rightdist=(self.xmax-self.drone_radius)- x
-        botdist= y-(self.ymin+self.drone_radius)
-        topdist=(self.ymax-self.drone_radius)- y
-        for d in (leftdist,rightdist,botdist,topdist):
-            if d>0.0 and d<0.05:
-                pot+= self.repulse_const/ d
-            elif d<=0.0:
-                # inside collision => big
                 pot+= self.repulse_const/0.01
+        # border
+        leftdist= x-(self.xmin+self.drone_radius)
+        if leftdist<0.05 and leftdist>0:
+            pot+= self.repulse_const/ leftdist
+        elif leftdist<=0:
+            pot+= self.repulse_const/0.01
+
+        rightdist= (self.xmax-self.drone_radius)- x
+        if rightdist<0.05 and rightdist>0:
+            pot+= self.repulse_const/ rightdist
+        elif rightdist<=0:
+            pot+= self.repulse_const/0.01
+
+        botdist= y- (self.ymin+self.drone_radius)
+        if botdist<0.05 and botdist>0:
+            pot+= self.repulse_const/ botdist
+        elif botdist<=0:
+            pot+= self.repulse_const/0.01
+
+        topdist= (self.ymax-self.drone_radius)- y
+        if topdist<0.05 and topdist>0:
+            pot+= self.repulse_const/ topdist
+        elif topdist<=0:
+            pot+= self.repulse_const/0.01
 
         return pot
 
@@ -429,7 +436,7 @@ class DroneWithBorderGradient:
 
     def loop_once(self):
         now= time.time()
-        dt= now-self.last_time
+        dt= now- self.last_time
         if dt>0.05:
             dt=0.05
         self.last_time= now
@@ -449,7 +456,7 @@ class DroneWithBorderGradient:
                 print("[INFO] wind =>", self.wind_on)
             elif k== ord('g'):
                 self.gradient_on= not self.gradient_on
-                print("[INFO] gradient =>",self.gradient_on)
+                print("[INFO] gradient =>", self.gradient_on)
             elif k== ord('s'):
                 if self.state=="IDLE":
                     self.start_trial()
@@ -469,30 +476,49 @@ class DroneWithBorderGradient:
         if self.state=="RUNNING":
             self.update_sim(dt)
 
-        # build haptic
+        # build haptic force
+        # wind => negative
         f_wind= self.get_current_wind() if (self.wind_on and self.state=="RUNNING") else np.array([0,0],dtype=float)
-        hf_x= -f_wind[0]- self.bump_force[0]
-        hf_y= -f_wind[1]- self.bump_force[1]
+        # gradient => same direction
+        f_grad= np.array([0.0,0.0],dtype=float)
+        if self.gradient_on and self.state=="RUNNING":
+            f_grad= self.compute_gradient_force()
 
-        # draw
+        # collision => negative
+        # Summation
+        # user wants wind negative, gradient positive => the user feels the "pull" from the gradient
+        # collision bump => negative
+        hf_x= -f_wind[0] + f_grad[0] - self.bump_force[0]
+        hf_y= -f_wind[1] + f_grad[1] - self.bump_force[1]
+
         self.graphics.erase_surfaces()
         elapsed_time=0.0
         if self.state=="RUNNING":
             elapsed_time= time.time()- self.start_time
 
+        # net fx,fy => for color => if not running, or no "latest_fx" => 0
         net_fx= getattr(self,"latest_fx",0)
         net_fy= getattr(self,"latest_fy",0)
-        self.graphics.render_left(self.handle_pos,(net_fx, net_fy), self.state,self.wind_on,self.gradient_on,elapsed_time)
-        self.graphics.render_right(self.drone_pos,self.drone_radius,
-                                   (self.xmin,self.xmax,self.ymin,self.ymax),
-                                   self.trees,
-                                   self.collision_count,
-                                   f_wind,self.wind_on,self.gradient_on,
-                                   self.start_area,self.finish_area,
-                                   self.pot_map_on,self.graphics.pot_surf)
+
+        self.graphics.render_left(self.handle_pos,(net_fx, net_fy),
+                                  self.state,self.wind_on,self.gradient_on,elapsed_time)
+        self.graphics.render_right(
+            drone_pos=self.drone_pos,
+            drone_radius=self.drone_radius,
+            walls=(self.xmin,self.xmax,self.ymin,self.ymax),
+            trees=self.trees,
+            collision_count=self.collision_count,
+            wind_vec=f_wind,
+            wind_on=self.wind_on,
+            gradient_on=self.gradient_on,
+            start_area=self.start_area,
+            finish_area=self.finish_area,
+            pot_map_on=self.pot_map_on,
+            pot_surf=self.graphics.pot_surf
+        )
         self.graphics.finalize()
 
-        # device or pseudo
+        # update device or pseudo
         haptic_force= np.array([hf_x,hf_y],dtype=float)
         if self.physics.is_device_connected():
             self.physics.update_force(haptic_force)
@@ -501,7 +527,7 @@ class DroneWithBorderGradient:
             self.handle_pos[:]= newp
 
     def start_trial(self):
-        print("[INFO] Trial => RUNNING")
+        print("[INFO] Start trial => RUNNING")
         self.state="RUNNING"
         self.start_time= time.time()
         self.path_length=0.0
@@ -528,8 +554,8 @@ class DroneWithBorderGradient:
         self.drone_vel*= self.damping
         oldp= self.drone_pos.copy()
         self.drone_pos+= self.drone_vel*dt
-        # path
-        self.path_length+= np.linalg.norm(self.drone_pos- oldp)
+        dist_move= np.linalg.norm(self.drone_pos- oldp)
+        self.path_length+= dist_move
 
         # collisions
         self.check_wall_collision_threshold()
@@ -558,12 +584,12 @@ class DroneWithBorderGradient:
     def compute_gradient_force(self):
         """
         sum of repulse from trees + border
-        less strong => repulse_const=0.01
-        use a simple 1/dist^2 approach
+        repulse_const=0.01 => weaker
+        if dist> sumr => f ~ 1/(dist-sumr)^2
+        border => if dist<0.05 => 1/dist^2
         """
-        drone_x, drone_y= self.drone_pos
+        drone_x,drone_y= self.drone_pos
         fx,fy= 0.0,0.0
-        # trees
         for (tx,ty,tr) in self.trees:
             dx= drone_x- tx
             dy= drone_y- ty
@@ -574,14 +600,15 @@ class DroneWithBorderGradient:
                 if eff<0.01: eff=0.01
                 nx= dx/dist
                 ny= dy/dist
-                val= self.repulse_const/(eff**2)
-                fx+= val*nx
-                fy+= val*ny
-        # border => if drone close to left, right, top, bottom => repulse
+                fval= self.repulse_const/(eff**2)
+                fx+= fval*nx
+                fy+= fval*ny
+
+        # border
         leftdist= drone_x-(self.xmin+self.drone_radius)
         if leftdist<0.05 and leftdist>0:
             fx+= self.repulse_const/(leftdist**2)
-        rightdist= (self.xmax-self.drone_radius)-drone_x
+        rightdist= (self.xmax-self.drone_radius)- drone_x
         if rightdist<0.05 and rightdist>0:
             fx-= self.repulse_const/(rightdist**2)
         botdist= drone_y- (self.ymin+self.drone_radius)
@@ -670,8 +697,8 @@ class DroneWithBorderGradient:
 
     def is_in_area(self, pos, area):
         (axmin,aymin,axmax,aymax)= area
-        return (pos[0]>= axmin and pos[0]<= axmax and
-                pos[1]>= aymin and pos[1]<= aymax)
+        return (pos[0]>=axmin and pos[0]<=axmax and
+                pos[1]>=aymin and pos[1]<= aymax)
 
     def trigger_bump(self):
         mag=0.5
@@ -680,7 +707,7 @@ class DroneWithBorderGradient:
         self.bump_ttl=0.5
 
     def save_trial(self):
-        # if state==RUNNING => end time
+        # if we are in RUNNING, let's finalize time
         end_t= time.time()
         dt=0.0
         if self.state=="RUNNING":
@@ -692,9 +719,8 @@ class DroneWithBorderGradient:
             "PathLength": round(self.path_length,2),
             "FinishReached": "YES" if self.finish_reached else "NO"
         }
-        print("Auto-saving trial =>", row)
-        fname="drone-results.xlsx"
-        import pandas as pd
+        print("[INFO] Saving trial =>", row)
+        fname= "drone-results.xlsx"
         if not os.path.isfile(fname):
             df= pd.DataFrame([row])
             df.to_excel(fname,index=False)
@@ -705,12 +731,12 @@ class DroneWithBorderGradient:
         print("[INFO] Results appended to", fname)
 
     def reset_env(self):
-        # if we are in RUNNING => do not save
-        # so basically we just discard that data
+        if self.state=="RUNNING":
+            # no save, just discard
+            pass
         self.state="IDLE"
         wL,hL= self.graphics.surface_left.get_size()
         self.handle_pos[:]= [wL//2,hL//2]
-        # place drone in bottom-left
         self.drone_pos[:]= [self.xmin+0.05,self.ymin+0.05]
         self.drone_vel[:]=0
         self.collision_count=0
@@ -723,11 +749,7 @@ class DroneWithBorderGradient:
         self.finish_reached=False
         self.path_length=0.0
 
-    def end_trial(self):
-        # not used since we do save_trial directly
-        pass
-
 
 if __name__=="__main__":
-    env= DroneWithBorderGradient()
-    env.run()
+    app= DroneWithBorderGradient()
+    app.run()
