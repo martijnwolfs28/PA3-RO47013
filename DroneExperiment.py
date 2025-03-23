@@ -10,6 +10,8 @@ import os
 ###############################################################################
 # Minimal PHYSICS
 ###############################################################################
+
+
 try:
     import serial.tools.list_ports
     REAL_DEVICE_SUPPORT = True
@@ -17,7 +19,7 @@ except ImportError:
     REAL_DEVICE_SUPPORT = False
 
 class Physics:
-    def __init__(self, hardware_version=3):
+    def __init__(self, hardware_version=2):
         self.hardware_version = hardware_version
         self.device_present = False
         if REAL_DEVICE_SUPPORT:
@@ -317,7 +319,17 @@ class DroneWithBorderGradient:
     def __init__(self):
         self.physics=Physics(hardware_version=3)
         self.graphics=Graphics(self.physics.is_device_connected(),(1200,600))
-
+        
+        self.mode = "Descending" # "Constant" "Descending"
+        
+        if self.mode == "No":
+            self.guidance_list = [0.0]*10
+        elif self.mode == "Constant":
+            self.guidance_list = values = [0.0, 0.0] + [1.0]*6 + [0.0, 0.0]
+        elif self.mode == "Descending":
+            des = np.linspace(1.5, 0.0, 7).tolist()
+            self.guidance_list = [0.0, 0.0] + des + [0.0]
+        
         # Constants
         self.TOTAL_RUNS = 10  # total environments/runs
 
@@ -354,7 +366,7 @@ class DroneWithBorderGradient:
         self.trees=[]  # current environment's trees
 
         # wind
-        self.wind_on=False
+        self.wind_on=True
         self.rng=random.Random(3333)
         self.num_wind_steps=2000
         self.wind_data=[]
@@ -486,7 +498,7 @@ class DroneWithBorderGradient:
         """
         run_number = index + 1
         if run_number in [1,2,9,10]:
-            self.wind_on = False
+            self.wind_on = True
             self.gradient_on = False
         else:
             # runs 3..8 => guidance ON
@@ -654,6 +666,9 @@ class DroneWithBorderGradient:
 
         # compute haptic force
         f_wind= self.get_current_wind() if (self.wind_on and self.state=="RUNNING") else np.array([0,0],dtype=float)
+        
+        
+        
         f_grad= np.array([0,0],dtype=float)
         if self.gradient_on and self.state=="RUNNING":
             f_grad= self.compute_gradient_force()
@@ -789,9 +804,16 @@ class DroneWithBorderGradient:
        Linearly increasing repulsive force from trees and walls.
        Force is only applied within a certain distance.
        """
+       
+       max_force = 0.0
+       
+       if self.current_env_index >= 2 and self.current_env_index <= 7:
+           max_force = self.guidance_list[self.current_env_index]
+           
+
+       
        repulse_radius = 0.1  # meters
-       max_force = 1.0       # Newtons
-   
+
        x, y = self.drone_pos
        fx, fy = 0.0, 0.0
    
@@ -837,7 +859,11 @@ class DroneWithBorderGradient:
        Attractive force pulling toward center of finish area.
        Increases linearly with distance, capped at max.
        """
-       max_force = 1.5  # Newtons
+       max_force = 0.0
+       
+       if self.current_env_index >= 2 and self.current_env_index <= 7:
+           max_force = self.guidance_list[self.current_env_index]
+  
        attract_radius = 2.6  # max distance to feel attraction
    
        # Center of the goal area
