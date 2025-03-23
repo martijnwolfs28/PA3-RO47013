@@ -7,6 +7,9 @@ import random
 import pandas as pd
 import os
 
+from HaplyHAPI import Board, Device, Mechanisms, Pantograph
+
+
 ###############################################################################
 # Minimal PHYSICS
 ###############################################################################
@@ -19,36 +22,100 @@ except ImportError:
     REAL_DEVICE_SUPPORT = False
 
 class Physics:
-    def __init__(self, hardware_version=2):
+    def __init__(self, reverse_motor_order=False, hardware_version=2):
+        self.reverse_motor_order = reverse_motor_order
         self.hardware_version = hardware_version
         self.device_present = False
-        if REAL_DEVICE_SUPPORT:
-            self.port = self.find_device_port()
-            if self.port:
-                print(f"[PHYSICS] Found device on {self.port}")
-                self.device_present = True
-            else:
-                print("[PHYSICS] No device found; simulating.")
-        else:
-            print("[PHYSICS] No serial library; simulating.")
-            self.port = None
 
-    def find_device_port(self):
-        import serial.tools.list_ports
-        ports = list(serial.tools.list_ports.comports())
+        self.l1=0.07
+        self.l2=0.09
+        self.d =0.038
+
+        self.port = self.serial_ports()
+        if self.port:
+            print("Board found on port %s" % self.port[0])
+            self.haplyBoard = Board("test", self.port[0], 0)
+            self.device = Device(5, self.haplyBoard)
+            self.pantograph = Pantograph(self.hardware_version)
+            self.device.set_mechanism(self.pantograph)
+
+            if self.hardware_version==2:
+                # If you suspect reversed directions, try flipping these or 0->1
+                self.device.add_actuator(1,1,2)
+                self.device.add_actuator(2,0,1)
+                self.device.add_encoder(1,1,241,10752,2)
+                self.device.add_encoder(2,0,-61,10752,1)
+            elif self.hardware_version==3:
+                pass
+
+            self.device.device_set_parameters()
+
+            import numpy as np
+            start_time=time.time()
+            while True:
+                if not self.haplyBoard.data_available():
+                    self.device.set_device_torques(np.zeros(2))
+                    self.device.device_write_torques()
+                    time.sleep(0.001)
+                    if time.time()-start_time>5.0:
+                        raise ValueError("Haply present, but no data!")
+                else:
+                    print("[PHYSICS]: Haply found & streaming. Ready!")
+                    break
+            self.device_present= True
+        else:
+            print("[PHYSICS]: No device found.")
+            self.device_present= False
+
+    def serial_ports(self):
+        ports= list(serial.tools.list_ports.comports())
+        result=[]
         for p in ports:
-            if "Arduino Zero" in p.description:
-                return p.device
-        return None
+            try:
+                port= p.device
+                s= serial.Serial(port)
+                s.close()
+                if p.description.startswith("Arduino Zero"):
+                    result.append(port)
+            except (OSError,serial.SerialException):
+                pass
+        return result
 
     def is_device_connected(self):
         return self.device_present
 
-    def update_force(self, force_vector):
-        pass
+    def get_device_pos(self):
+        if not self.device_present:
+            raise ValueError("[PHYSICS] get_device_pos() called, no device!")
+        self.device.device_read_data()
+        angles= self.device.get_device_angles()
+        dev_pos= self.device.get_device_position(angles)
+
+        import math
+        a1= math.radians(angles[0])
+        a2= math.radians(angles[1])
+        pA0=(0.0,0.0)
+        pB0=(self.d,0.0)
+        pA =(self.l1*math.cos(a1), self.l1*math.sin(a1))
+        pB =(self.l1*math.cos(a2)+ self.d, self.l1*math.sin(a2))
+        return pA0,pB0,pA,pB, dev_pos
+
+    def update_force(self, f_2d):
+        if not self.device_present:
+            return
+        import numpy as np
+        # Invert Y
+        force_to_send= np.array([-f_2d[0], -f_2d[1]],dtype=float)
+        self.device.set_device_torques(force_to_send)
+        self.device.device_write_torques()
+        time.sleep(0.001)
 
     def close(self):
-        print("[PHYSICS] Closed.")
+        if self.device_present:
+            self.device.set_device_torques([0,0])
+            self.device.device_write_torques()
+            time.sleep(0.001)
+        print("[PHYSICS] closed.")
 
 
 ###############################################################################
@@ -972,9 +1039,11 @@ class DroneWithBorderGradient:
 
     def save_trial(self):
         end_t= time.time()
-        dt=0.0
+        
+        dt= end_t- self.start_time
+        
         if self.state=="RUNNING":
-            dt= end_t- self.start_time
+            
             self.state="FINISHED"
         row={
             "RunNum": self.current_env_index+1,
@@ -983,7 +1052,8 @@ class DroneWithBorderGradient:
             "PathLength": round(self.path_length,2),
             "FinishReached": "YES" if self.finish_reached else "NO",
             "WindAtStart": "YES" if self.start_wind_state else "NO",
-            "GradAtStart": "YES" if self.start_grad_state else "NO"
+            "GradAtStart": "YES" if self.start_grad_state else "NO",
+            "Mode": self.mode
         }
         print("[INFO] Saving trial =>", row)
         fname="drone-results.xlsx"
