@@ -17,7 +17,7 @@ except ImportError:
     REAL_DEVICE_SUPPORT = False
 
 class Physics:
-    def __init__(self, hardware_version=3):
+    def __init__(self, hardware_version=2):
         self.hardware_version = hardware_version
         self.device_present = False
         if REAL_DEVICE_SUPPORT:
@@ -719,10 +719,12 @@ class DroneWithBorderGradient:
 
     def save_trial(self):
         end_t= time.time()
-        dt=0.0
+
+        dt = end_t - self.start_time if self.state in ("RUNNING", "FINISHED") else 0.0
+    
         if self.state=="RUNNING":
-            dt= end_t- self.start_time
             self.state="FINISHED"
+
         row={
             "Collisions": self.collision_count,
             "TimeSec": round(dt,2),
