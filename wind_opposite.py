@@ -290,7 +290,7 @@ class DroneWithBorderGradient:
 
         # gradient
         self.gradient_on=False
-        self.repulse_const=0.005  # less intense
+        self.repulse_const=0.0001  # less intense
         # states
         self.state="IDLE"
         self.start_time=0.0
@@ -485,8 +485,14 @@ class DroneWithBorderGradient:
         # collision => negative
         # gradient => if on => same direction as drone's gradient
         f_grad= np.array([0,0],dtype=float)
+        
         if self.gradient_on and self.state=="RUNNING":
             f_grad= self.compute_gradient_force()
+            
+        f_att = np.array([0, 0], dtype=float)
+        
+        if self.gradient_on and self.state == "RUNNING":
+            f_att = self.compute_attractive_force()
         # bump => negative
         # haptic wind => if normal => -f_wind, if inverse => +f_wind
         if self.haptic_wind_mode=="normal":
@@ -494,8 +500,8 @@ class DroneWithBorderGradient:
         else:
             wind_contrib= f_wind
 
-        hf_x= wind_contrib[0] + f_grad[0] - self.bump_force[0]
-        hf_y= wind_contrib[1] + f_grad[1] - self.bump_force[1]
+        hf_x= wind_contrib[0] + f_grad[0] - self.bump_force[0] + f_att[0]
+        hf_y= wind_contrib[1] + f_grad[1] - self.bump_force[1] + f_att[1]
 
         self.graphics.erase_surfaces()
 
@@ -594,42 +600,81 @@ class DroneWithBorderGradient:
         (mag,ang)= self.wind_data[self.wind_idx]
         self.wind_idx= (self.wind_idx+1)% len(self.wind_data)
         return np.array([mag*math.cos(ang), mag*math.sin(ang)],dtype=float)
-
+    
+    
     def compute_gradient_force(self):
         """
-        sum of repulse from trees + border => 1/(dist-sumr)^2 or if dist< sumr => collision logic
-        plus smaller repulse_const
+        Linearly increasing repulsive force from trees and walls.
+        Force is only applied within a certain distance.
         """
-        x,y= self.drone_pos
-        fx,fy= 0.0,0.0
-        for (tx,ty,tr) in self.trees:
-            dx= x- tx
-            dy= y- ty
-            dist= math.hypot(dx,dy)
-            sumr= tr+self.drone_radius
-            if dist> sumr:
-                eff= dist- sumr
-                if eff<0.01: eff=0.01
-                nx= dx/dist
-                ny= dy/dist
-                val= self.repulse_const/(eff**2)
-                fx+= val*nx
-                fy+= val*ny
-        # border
-        leftdist= x-(self.xmin+self.drone_radius)
-        if leftdist<0.05 and leftdist>0:
-            fx+= self.repulse_const/(leftdist**2)
-        rightdist= (self.xmax-self.drone_radius)- x
-        if rightdist<0.05 and rightdist>0:
-            fx-= self.repulse_const/(rightdist**2)
-        botdist= y-(self.ymin+self.drone_radius)
-        if botdist<0.05 and botdist>0:
-            fy+= self.repulse_const/(botdist**2)
-        topdist= (self.ymax-self.drone_radius)- y
-        if topdist<0.05 and topdist>0:
-            fy-= self.repulse_const/(topdist**2)
+        repulse_radius = 0.1  # meters
+        max_force = 1.0       # Newtons
+    
+        x, y = self.drone_pos
+        fx, fy = 0.0, 0.0
+    
+        # Trees
+        for (tx, ty, tr) in self.trees:
+            dx = x - tx
+            dy = y - ty
+            dist = math.hypot(dx, dy)
+            sumr = tr + self.drone_radius
+            eff_dist = dist - sumr
+            if eff_dist < repulse_radius:
+                if eff_dist < 0.001:
+                    eff_dist = 0.001  # avoid divide-by-zero
+                direction = np.array([dx, dy]) / dist
+                # Linearly scale the force: 0 N at 0.1 m, max at contact
+                force_mag = max_force * (repulse_radius - eff_dist) / repulse_radius
+                f = force_mag * direction
+                fx += f[0]
+                fy += f[1]
+    
+        # Walls (similar logic)
+        # Left wall
+        d = x - (self.xmin + self.drone_radius)
+        if 0 < d < repulse_radius:
+            fx += max_force * (repulse_radius - d) / repulse_radius
+        # Right wall
+        d = (self.xmax - self.drone_radius) - x
+        if 0 < d < repulse_radius:
+            fx -= max_force * (repulse_radius - d) / repulse_radius
+        # Bottom wall
+        d = y - (self.ymin + self.drone_radius)
+        if 0 < d < repulse_radius:
+            fy += max_force * (repulse_radius - d) / repulse_radius
+        # Top wall
+        d = (self.ymax - self.drone_radius) - y
+        if 0 < d < repulse_radius:
+            fy -= max_force * (repulse_radius - d) / repulse_radius
+    
+        return np.array([fx, fy], dtype=float)
+    
+    def compute_attractive_force(self):
+        """
+        Attractive force pulling toward center of finish area.
+        Increases linearly with distance, capped at max.
+        """
+        max_force = 1.5  # Newtons
+        attract_radius = 2.6  # max distance to feel attraction
+    
+        # Center of the goal area
+        gx = 0.5 * (self.finish_area[0] + self.finish_area[2])
+        gy = 0.5 * (self.finish_area[1] + self.finish_area[3])
+        goal_pos = np.array([gx, gy], dtype=float)
+    
+        delta = goal_pos - self.drone_pos
+        dist = np.linalg.norm(delta)
+    
+        if dist < 1e-6:
+            return np.array([0.0, 0.0], dtype=float)
+    
+        direction = delta / dist
+        force_mag = min(max_force, (dist / attract_radius) * max_force)
+    
+        return force_mag * direction
 
-        return np.array([fx,fy],dtype=float)
+
 
     def update_bump(self, dt):
         if self.bump_ttl>0:
