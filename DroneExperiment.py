@@ -335,7 +335,7 @@ class DroneWithBorderGradient:
         self.finish_area= [0,0,0,0]
 
         # drone
-        self.drone_pos=np.array([self.xmin+0.05,self.ymin+0.05],dtype=float)
+        
         self.drone_vel=np.array([0.0,0.0],dtype=float)
         self.drone_radius=0.03
         self.mass=1.0
@@ -379,7 +379,7 @@ class DroneWithBorderGradient:
         self.state="IDLE"
         self.start_time=0.0
         self.path_length=0.0
-        self.prev_pos=self.drone_pos.copy()
+
         self.finish_reached=False
 
         # potential map
@@ -411,6 +411,12 @@ class DroneWithBorderGradient:
         self.load_environment(0)
         self.set_start_finish_for_run(0)  # sets start_area & finish_area
         self.set_default_guidance_for_run(0)  # sets wind_on / gradient_on
+        
+        sx = 0.5 * (self.start_area[0] + self.start_area[2])
+        sy = 0.5 * (self.start_area[1] + self.start_area[3])
+        self.drone_pos = np.array([sx, sy], dtype=float)
+        
+        self.prev_pos=self.drone_pos.copy()
 
     def create_test_environments(self, num_envs=10):
         """
@@ -977,8 +983,9 @@ class DroneWithBorderGradient:
         wL,hL=self.graphics.surface_left.get_size()
         self.handle_pos[:]=[wL//2,hL//2]
 
-        # reset drone
-        self.drone_pos[:]=[self.xmin+0.05,self.ymin+0.05]
+        
+        
+        
         self.drone_vel[:]=0
         self.collision_count=0
         self.wall_collision=False
@@ -995,9 +1002,16 @@ class DroneWithBorderGradient:
             self.load_environment(self.current_env_index)
             self.set_start_finish_for_run(self.current_env_index)
             self.set_default_guidance_for_run(self.current_env_index)
+            
+            
 
         if self.pot_map_on:
             self.make_pot_surf()
+            
+        # reset drone
+        sx = 0.5 * (self.start_area[0] + self.start_area[2])
+        sy = 0.5 * (self.start_area[1] + self.start_area[3])
+        self.drone_pos[:] = [sx, sy]
 
     def end_trial(self):
         pass
